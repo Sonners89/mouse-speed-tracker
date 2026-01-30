@@ -1,33 +1,34 @@
 import com.formdev.flatlaf.FlatLightLaf;
+import com.sun.jna.platform.win32.User32;
+import com.sun.jna.platform.win32.WinDef;
 
 import javax.swing.*;
 import java.awt.*;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 
 public class MouseSpeedTracker extends JFrame {
-    private static final double DPI = 1000.0; // Настройте DPI вашей мыши
+    private static final double DPI = 1000.0;
     private static final double INCH_TO_METER = 0.0254;
 
-    private long lastTime = 0;
-    private double lastX = 0;
-    private double lastY = 0;
     private double currentSpeed = 0.0;
     private double maxSpeed = 0.0;
-    private final Timer updateTimer;
+    private long lastTime = 0;
+    private int lastX = 0, lastY = 0;
 
     private final JLabel currentSpeedLabel;
     private final JLabel maxSpeedLabel;
+    private final JLabel latencyLabel;
+
+    private volatile boolean running = true;
+    private Thread pollThread;
 
     public MouseSpeedTracker() {
-        setTitle("Mouse Speed Tracker");
+        setTitle("Mouse Speed Tracker - Ultra Low Latency");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(400, 250);
+        setSize(450, 300);
         setLayout(new GridBagLayout());
 
-        // Установка FlatLaf для современного вида
         try {
             UIManager.setLookAndFeel(new FlatLightLaf());
         } catch (Exception ex) {
@@ -53,7 +54,7 @@ public class MouseSpeedTracker extends JFrame {
         add(new JLabel("Текущая скорость:"), gbc);
 
         currentSpeedLabel = new JLabel("0.000 m/s", SwingConstants.RIGHT);
-        currentSpeedLabel.setFont(new Font("Arial", Font.BOLD, 16));
+        currentSpeedLabel.setFont(new Font("Arial", Font.BOLD, 20));
         currentSpeedLabel.setForeground(new Color(0, 100, 0));
         gbc.gridx = 1;
         add(currentSpeedLabel, gbc);
@@ -64,13 +65,24 @@ public class MouseSpeedTracker extends JFrame {
         add(new JLabel("Максимальная скорость:"), gbc);
 
         maxSpeedLabel = new JLabel("0.000 m/s", SwingConstants.RIGHT);
-        maxSpeedLabel.setFont(new Font("Arial", Font.BOLD, 16));
+        maxSpeedLabel.setFont(new Font("Arial", Font.BOLD, 20));
         maxSpeedLabel.setForeground(new Color(150, 0, 0));
         gbc.gridx = 1;
         add(maxSpeedLabel, gbc);
 
-        // Кнопка сброса
+        // Задержка
         gbc.gridy = 3;
+        gbc.gridx = 0;
+        add(new JLabel("Задержка:"), gbc);
+
+        latencyLabel = new JLabel("< 1 ms", SwingConstants.RIGHT);
+        latencyLabel.setFont(new Font("Arial", Font.PLAIN, 12));
+        latencyLabel.setForeground(Color.BLUE);
+        gbc.gridx = 1;
+        add(latencyLabel, gbc);
+
+        // Кнопка сброса
+        gbc.gridy = 4;
         gbc.gridx = 0;
         gbc.gridwidth = 2;
         JButton resetButton = new JButton("Сбросить максимальную скорость");
@@ -80,118 +92,119 @@ public class MouseSpeedTracker extends JFrame {
         });
         add(resetButton, gbc);
 
-        // Информация
-        gbc.gridy = 4;
-        JLabel infoLabel = new JLabel("<html><div style='text-align: center;'>"
-                + "DPI: " + DPI + "<br>"
-                + "Перемещайте мышь для измерения скорости"
-                + "</div></html>", SwingConstants.CENTER);
-        infoLabel.setForeground(Color.GRAY);
-        add(infoLabel, gbc);
-
-        // Настройка отслеживания мыши
-        setupMouseTracking();
-
-        // Таймер для периодического обновления
-        updateTimer = new Timer(10, e -> updateLabels());
-        updateTimer.start();
+        // Запуск потока опроса
+        startPollingThread();
 
         // Обработчик закрытия окна
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                updateTimer.stop();
+                running = false;
+                if (pollThread != null) {
+                    try {
+                        pollThread.join(1000);
+                    } catch (InterruptedException ex) {
+                        ex.printStackTrace();
+                    }
+                }
             }
         });
 
         setLocationRelativeTo(null);
     }
 
-    private void setupMouseTracking() {
-        addMouseMotionListener(new MouseAdapter() {
-            @Override
-            public void mouseMoved(MouseEvent e) {
-                calculateSpeed(e.getX(), e.getY());
+    private void startPollingThread() {
+        pollThread = new Thread(() -> {
+            try {
+                Thread.currentThread().setPriority(Thread.MAX_PRIORITY);
+            } catch (SecurityException e) {
+                // Игнорируем
             }
 
-            @Override
-            public void mouseDragged(MouseEvent e) {
-                calculateSpeed(e.getX(), e.getY());
+            while (running) {
+                long startTime = System.nanoTime();
+
+                // Получаем позицию мыши напрямую через WinAPI
+                WinDef.POINT point = new WinDef.POINT();
+                User32.INSTANCE.GetCursorPos(point);
+
+                long currentTime = System.currentTimeMillis();
+
+                if (lastTime == 0) {
+                    lastTime = currentTime;
+                    lastX = point.x;
+                    lastY = point.y;
+                } else {
+                    long timeDiff = currentTime - lastTime;
+
+                    if (timeDiff > 0) {
+                        double dx = point.x - lastX;
+                        double dy = point.y - lastY;
+                        double distancePixels = Math.sqrt(dx * dx + dy * dy);
+
+                        double distanceMeters = (distancePixels / DPI) * INCH_TO_METER;
+                        double timeSeconds = timeDiff / 1000.0;
+
+                        double instantSpeed = distanceMeters / timeSeconds;
+
+                        // Экспоненциальное сглаживание
+                        currentSpeed = 0.3 * currentSpeed + 0.7 * instantSpeed;
+
+                        if (currentSpeed > maxSpeed) {
+                            maxSpeed = currentSpeed;
+                        }
+
+                        updateLabels();
+
+                        lastX = point.x;
+                        lastY = point.y;
+                        lastTime = currentTime;
+                    }
+                }
+
+                // Вычисление задержки
+                long endTime = System.nanoTime();
+                long latencyNanos = endTime - startTime;
+                updateLatency(latencyNanos);
+
+                // Короткая пауза для уменьшения нагрузки на CPU
+                try {
+                    Thread.sleep(1); // 1 мс
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
             }
         });
 
-        // Также отслеживаем движение мыши вне окна, если окно активно
-        Toolkit.getDefaultToolkit().addAWTEventListener(event -> {
-            if (event instanceof MouseEvent) {
-                MouseEvent me = (MouseEvent) event;
-                if (me.getID() == MouseEvent.MOUSE_MOVED && isActive()) {
-                    Point windowPoint = getLocationOnScreen();
-                    Point mousePoint = me.getLocationOnScreen();
-                    int relativeX = mousePoint.x - windowPoint.x;
-                    int relativeY = mousePoint.y - windowPoint.y;
-
-                    // Проверяем, находится ли мышь в пределах окна
-                    if (relativeX >= 0 && relativeX <= getWidth() &&
-                            relativeY >= 0 && relativeY <= getHeight()) {
-                        calculateSpeed(relativeX, relativeY);
-                    }
-                }
-            }
-        }, AWTEvent.MOUSE_MOTION_EVENT_MASK);
-    }
-
-    private void calculateSpeed(double x, double y) {
-        long currentTime = System.currentTimeMillis();
-
-        if (lastTime == 0) {
-            lastTime = currentTime;
-            lastX = x;
-            lastY = y;
-            return;
-        }
-
-        long timeDiff = currentTime - lastTime;
-
-        if (timeDiff > 0) {
-            // Вычисляем расстояние в пикселях
-            double dx = x - lastX;
-            double dy = y - lastY;
-            double distancePixels = Math.sqrt(dx * dx + dy * dy);
-
-            // Конвертируем в метры
-            double distanceMeters = (distancePixels / DPI) * INCH_TO_METER;
-
-            // Вычисляем скорость (м/с)
-            double timeSeconds = timeDiff / 1000.0;
-            currentSpeed = distanceMeters / timeSeconds;
-
-            // Обновляем максимальную скорость
-            if (currentSpeed > maxSpeed) {
-                maxSpeed = currentSpeed;
-            }
-
-            lastTime = currentTime;
-            lastX = x;
-            lastY = y;
-
-            updateLabels();
-        }
+        pollThread.setDaemon(true);
+        pollThread.start();
     }
 
     private void updateLabels() {
-        currentSpeedLabel.setText(String.format("%.3f m/s", currentSpeed));
-        maxSpeedLabel.setText(String.format("%.3f m/s", maxSpeed));
+        SwingUtilities.invokeLater(() -> {
+            currentSpeedLabel.setText(String.format("%.3f m/s", currentSpeed));
+            maxSpeedLabel.setText(String.format("%.3f m/s", maxSpeed));
+        });
+    }
 
-        // Плавное уменьшение текущей скорости, если мышь не двигается
-        if (System.currentTimeMillis() - lastTime > 100) {
-            currentSpeed *= 0.9;
-            if (currentSpeed < 0.001) {
-                currentSpeed = 0.0;
-            }
-        }
+    private void updateLatency(long nanos) {
+        SwingUtilities.invokeLater(() -> {
+            double ms = nanos / 1_000_000.0;
+            latencyLabel.setText(String.format("%.2f ms", ms));
+        });
     }
 
     public static void main(String[] args) {
+        // Проверяем ОС
+        String os = System.getProperty("os.name").toLowerCase();
+        if (!os.contains("win")) {
+            JOptionPane.showMessageDialog(null,
+                    "Эта версия использует WinAPI и работает только на Windows",
+                    "Ошибка", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
         SwingUtilities.invokeLater(() -> {
             MouseSpeedTracker tracker = new MouseSpeedTracker();
             tracker.setVisible(true);
