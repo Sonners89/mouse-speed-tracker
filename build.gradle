@@ -1,20 +1,33 @@
 plugins {
     id 'java'
+    id 'application'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
 }
 
-group = 'ru.qms'
-version = '1.0-SNAPSHOT'
+group = 'mousespeed'
+version = '1.0.0'
+sourceCompatibility = '11'
 
 repositories {
     mavenCentral()
 }
 
 dependencies {
-    testImplementation platform('org.junit:junit-bom:5.10.0')
-    testImplementation 'org.junit.jupiter:junit-jupiter'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    implementation 'com.formdev:flatlaf:3.4.1'
 }
 
-test {
-    useJUnitPlatform()
+application {
+    mainClass = 'MouseSpeedTracker'
+}
+
+jar {
+    manifest {
+        attributes 'Main-Class': 'MouseSpeedTracker'
+    }
+}
+
+shadowJar {
+    archiveBaseName = 'MouseSpeedTracker'
+    archiveClassifier = ''
+    archiveVersion = ''
 }
