@@ -1,1 +1,11 @@
+// Для плагина launch4j может потребоваться репозиторий
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        maven {
+            url = uri('https://plugins.gradle.org/m2/')
+        }
+    }
+}
+
 rootProject.name = 'mouse-speed-tracker'

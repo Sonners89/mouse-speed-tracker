@@ -1,12 +1,19 @@
 plugins {
     id 'java'
     id 'application'
+    id 'com.github.ben-manes.versions' version '0.51.0'
+    id 'edu.sc.seis.launch4j' version '2.5.4'
     id 'com.github.johnrengelman.shadow' version '8.1.1'
 }
 
-group = 'mousespeed'
+group = 'com.mousespeed'
 version = '1.0.0'
-sourceCompatibility = '11'
+description = 'Mouse speed tracker'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
+}
 
 repositories {
     mavenCentral()
@@ -14,23 +21,189 @@ repositories {
 
 dependencies {
     implementation 'com.formdev:flatlaf:3.4.1'
-    implementation 'com.formdev:flatlaf:3.4.1'
-    implementation 'net.java.dev.jna:jna:5.14.0'
-    implementation 'net.java.dev.jna:jna-platform:5.14.0'
+    // Раскомментируйте для использования JNA версии (еще более низкая задержка)
+     implementation 'net.java.dev.jna:jna:5.14.0'
+     implementation 'net.java.dev.jna:jna-platform:5.14.0'
+
+    testImplementation platform('org.junit:junit-bom:5.10.0')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
 application {
     mainClass = 'MouseSpeedTracker'
 }
 
-jar {
-    manifest {
-        attributes 'Main-Class': 'MouseSpeedTracker'
-    }
-}
-
+// Создание JAR файла с зависимостями (fat JAR)
 shadowJar {
     archiveBaseName = 'MouseSpeedTracker'
     archiveClassifier = ''
     archiveVersion = ''
+    manifest {
+        attributes(
+                'Main-Class': 'MouseSpeedTracker',
+                'Implementation-Title': 'Mouse Speed Tracker',
+                'Implementation-Version': version
+        )
+    }
+
+    // Исключаем ненужные файлы из зависимостей
+    exclude 'META-INF/*.RSA', 'META-INF/*.SF', 'META-INF/*.DSA'
+
+    // Минимизируем JAR (опционально)
+    minimize {
+        exclude(dependency('com.formdev:flatlaf:.*'))
+    }
+}
+
+// Альтернативный способ создания JAR (без shadow)
+jar {
+    manifest {
+        attributes(
+                'Main-Class': 'MouseSpeedTracker',
+                'Implementation-Title': 'Mouse Speed Tracker',
+                'Implementation-Version': version
+        )
+    }
+
+    archiveBaseName = 'MouseSpeedTracker'
+    archiveVersion = ''
+
+    // Включаем зависимости в JAR
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+// Конфигурация для создания .exe файла с помощью launch4j
+launch4j {
+    mainClassName = 'MouseSpeedTracker'
+    outfile = 'MouseSpeedTracker.exe'
+    // Раскомментируйте для добавления иконки (требуется файл icon.ico в корне проекта)
+    // icon = "${projectDir}/icon.ico"
+
+    // Путь к JAR файлу (используем shadowJar)
+    jar = "${project.buildDir}/libs/MouseSpeedTracker.jar"
+
+    // Настройки для .exe
+    headerType = 'gui' // 'gui' для оконного приложения, 'console' для консольного
+    productName = 'Mouse Speed Tracker'
+    fileDescription = 'Измеритель скорости движения компьютерной мыши'
+    copyright = '2024'
+    companyName = 'MouseSpeed'
+    version = project.version
+    textVersion = project.version
+
+    // Настройки JRE
+    jreMinVersion = '11'
+    jdkPreference = 'preferJre'
+    bundledJre64Bit = true
+    bundledJrePath = '%JAVA_HOME%'
+
+    // Опции JVM
+    jvmOptions = [
+            '-Xmx256m',
+            '-Xms128m',
+            '-Dfile.encoding=UTF-8',
+            '-Dsun.java2d.d3d=false' // Улучшение производительности графики
+    ]
+
+    // Дополнительные настройки
+    chdir = '.'
+    stayAlive = false
+    dontWrapJar = false
+    errTitle = 'Ошибка приложения'
+    supportUrl = ''
+
+    // Настройка иконки в заголовке окна (опционально)
+    // Для Windows Vista и выше
+    // manifest = "${projectDir}/app.manifest"
+
+    // Класс для загрузки (опционально)
+    // classPath = ['libs/*.jar']
+
+    // Переменные окружения (опционально)
+    // environmentVariables = ['PATH': '%JAVA_HOME%/bin;%PATH%']
+}
+
+// Задача для подготовки JAR файла для launch4j
+tasks.register('prepareForLaunch4j', Copy) {
+    dependsOn shadowJar
+    from shadowJar
+    into "${buildDir}/launch4j"
+
+    // Переименовываем JAR для совместимости
+    rename { String fileName ->
+        'MouseSpeedTracker.jar'
+    }
+}
+
+// Убедимся, что launch4j зависит от подготовки JAR
+tasks.createExe.dependsOn prepareForLaunch4j
+
+// Задача для очистки всех сборок
+tasks.register('cleanAll', Delete) {
+    dependsOn clean
+    delete 'build', 'out', 'dist'
+}
+
+// Упрощенная сборка exe
+tasks.register('buildExe') {
+    dependsOn 'createExe'
+    group = 'build'
+    description = 'Собирает .exe файл'
+
+    doLast {
+        println "EXE файл создан: ${buildDir}/launch4j/MouseSpeedTracker.exe"
+        println "Скопируйте его в удобное место для использования."
+    }
+}
+
+// Задача для сборки portable версии (все в одной папке)
+tasks.register('buildPortable', Copy) {
+    dependsOn createExe
+    from("${buildDir}/launch4j") {
+        include 'MouseSpeedTracker.exe'
+    }
+    into "${buildDir}/dist/portable"
+
+    doLast {
+        println "Portable версия создана в: ${buildDir}/dist/portable/"
+        println "Можно скопировать эту папку на любой компьютер с Java 11+."
+    }
+}
+
+// Настраиваем зависимости задач
+tasks.named('jar') {
+    enabled = false  // Отключаем обычный jar, используем shadowJar
+}
+
+tasks.named('shadowJar') {
+    // Оптимизация размера
+    minimize()
+}
+
+// Конфигурация тестов
+test {
+    useJUnitPlatform()
+    testLogging {
+        events "passed", "skipped", "failed"
+    }
+}
+
+// Задача для создания дистрибутива со всеми файлами
+tasks.register('dist', Zip) {
+    dependsOn buildPortable
+    archiveFileName = "MouseSpeedTracker-v${version}.zip"
+    destinationDirectory = file("${buildDir}/dist")
+
+    from("${buildDir}/dist/portable") {
+        include '**/*'
+    }
+
+    doLast {
+        println "Дистрибутив создан: ${buildDir}/dist/MouseSpeedTracker-v${version}.zip"
+    }
 }
